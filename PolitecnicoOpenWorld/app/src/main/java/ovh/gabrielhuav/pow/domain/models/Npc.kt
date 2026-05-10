@@ -29,5 +29,6 @@ data class Npc(
 
     var isMoving: Boolean = false,
     var facingRight: Boolean = true,
-    var visualConfig: CharacterVisualConfig? = null // Nullable para que no exploten los autos
+    var visualConfig: CharacterVisualConfig? = null, // Nullable para que no exploten los autos
+    val displayName: String? = null
 )

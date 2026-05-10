@@ -78,6 +78,7 @@ private data class ServerMessage(
     val y: Double? = null,
     val action: String? = null,
     val facingRight: Boolean? = null,
+    val displayName: String? = null,
     val npc: MultiplayerNpc? = null,
     val npcs: List<MultiplayerNpc>? = null,
     val npcId: String? = null,
@@ -258,7 +259,8 @@ class WorldMapViewModel(
                             isRemote = true,
                             isMoving = true,
                             facingRight = msg.facingRight == true,
-                            visualConfig = multiplayerConfig
+                            visualConfig = multiplayerConfig,
+                            displayName = msg.displayName
                         )
                         remoteEntities[msg.id] = otherPlayer
                         updateNpcsState()

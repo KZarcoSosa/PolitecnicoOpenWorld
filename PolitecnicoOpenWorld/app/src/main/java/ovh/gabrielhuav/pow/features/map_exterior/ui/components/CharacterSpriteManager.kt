@@ -97,11 +97,10 @@ object CharacterSpriteManager {
         isMoving: Boolean,
         isFacingRight: Boolean,
         timeMs: Long,
-        scale: Float
+        scale: Float,
+        displayName: String? = null // 🟢 NUEVO PARÁMETRO
     ): android.graphics.drawable.Drawable? {
         val baseBitmap = generateAssembledBitmap(context, visualConfig, isMoving, timeMs) ?: return null
-
-        // Redondear la escala para evitar fugas de memoria con decimales infinitos
         val roundedScale = Math.round(scale * 20f) / 20f
 
         val frames = getAnimationFrames(context, visualConfig.bodyFolder, visualConfig.bodyPrefix)
@@ -110,22 +109,60 @@ object CharacterSpriteManager {
             if (visualConfig.bodyPrefix == "p_mult_" && frames.size >= 7) 6 else 0
         }
 
-        // Llave única de caché
-        val cacheKey = "${visualConfig.bodyPrefix}_${frameIndex}_${visualConfig.shirtColor.value}_${isFacingRight}_$roundedScale"
+        // 🟢 Llave única de caché, ahora incluye el nombre para no cruzar imágenes de jugadores
+        val cacheKey = "${visualConfig.bodyPrefix}_${frameIndex}_${visualConfig.shirtColor.value}_${isFacingRight}_${roundedScale}_${displayName ?: "none"}"
 
         if (drawableCache.containsKey(cacheKey)) return drawableCache[cacheKey]
 
+        // 1. Matriz para el personaje (Escala y Espejeo)
         val matrix = android.graphics.Matrix()
         matrix.postScale(roundedScale, roundedScale)
         if (!isFacingRight) {
-            // Espejeado: Invertimos horizontalmente
             matrix.postScale(-1f, 1f)
         }
 
-        // Crear el bitmap transformado final
-        val finalBmp = Bitmap.createBitmap(
+        val scaledBmp = Bitmap.createBitmap(
             baseBitmap, 0, 0, baseBitmap.width, baseBitmap.height, matrix, true
         )
+
+        // 2. 🟢 Dibujo Combinado: Texto sobre el Personaje
+        val finalBmp = if (!displayName.isNullOrBlank()) {
+            // Configurar el estilo del texto
+            val textPaint = android.graphics.Paint().apply {
+                color = android.graphics.Color.BLACK
+                // Hacemos que el texto se adapte inteligentemente, sin ser demasiado pequeño
+                textSize = 45f * roundedScale.coerceAtLeast(0.4f)
+                isAntiAlias = true
+                textAlign = android.graphics.Paint.Align.CENTER
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setShadowLayer(4f, 1f, 1f, android.graphics.Color.YELLOW) // Borde para legibilidad
+            }
+
+            val textHeight = textPaint.descent() - textPaint.ascent()
+            val textWidth = textPaint.measureText(displayName)
+
+            // Creamos un Canvas más grande que cubra tanto texto como sprite
+            val totalWidth = maxOf(scaledBmp.width, textWidth.toInt() + 20)
+            val paddingY = 8
+            val totalHeight = scaledBmp.height + textHeight.toInt() + paddingY
+
+            val compositeBmp = Bitmap.createBitmap(totalWidth, totalHeight, Bitmap.Config.ARGB_8888)
+            val canvas = android.graphics.Canvas(compositeBmp)
+
+            // Dibujamos el texto (centrado arriba)
+            val textX = totalWidth / 2f
+            val textY = textHeight - textPaint.descent()
+            canvas.drawText(displayName, textX, textY, textPaint)
+
+            // Dibujamos al personaje (centrado abajo del texto)
+            val charX = (totalWidth - scaledBmp.width) / 2f
+            val charY = textHeight + paddingY
+            canvas.drawBitmap(scaledBmp, charX, charY, null)
+
+            compositeBmp
+        } else {
+            scaledBmp // Si no hay nombre, el BMP sigue normal
+        }
 
         val drawable = android.graphics.drawable.BitmapDrawable(context.resources, finalBmp)
         drawableCache[cacheKey] = drawable

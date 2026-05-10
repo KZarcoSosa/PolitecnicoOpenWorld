@@ -139,7 +139,7 @@ fun WorldMapScreen(
                         val isZoomedIn = currentZoom >= 17.0
                         val timeMs = System.currentTimeMillis()
 
-                        // 🟢 1. LIMPIEZA DE DESCONECTADOS/ELIMINADOS
+                        // 1. LIMPIEZA DE DESCONECTADOS/ELIMINADOS
                         // Extraemos los IDs que existen actualmente en el estado
                         val currentNpcIds = uiState.npcs.map { it.id }.toSet()
                         val iterator = markerCache.iterator()
@@ -152,7 +152,7 @@ fun WorldMapScreen(
                             }
                         }
 
-                        // 🟢 2. ACTUALIZACIÓN Y DIBUJADO DE MARCADORES ACTIVOS
+                        // 2. ACTUALIZACIÓN Y DIBUJADO DE MARCADORES ACTIVOS
                         uiState.npcs.forEach { npc ->
                             val id = npc.id
                             val marker = markerCache[id] ?: Marker(view).apply {
@@ -166,16 +166,13 @@ fun WorldMapScreen(
                             // Renderizado visual según el zoom
                             if (isZoomedIn) {
                                 if (npc.visualConfig != null) {
-                                    // Lógica para NPCs Modulares (Peatones/Multijugador)
                                     marker.setAlpha(1f)
-
                                     val currentlyMoving = npc.speed > 0 || npc.isMoving
                                     val normalizedAngle = (npc.rotationAngle % 360f + 360f) % 360f
-                                    // 0 a 180 es Este/Derecha. Mayor a 180 es Oeste/Izquierda.
                                     val isFacingRight = normalizedAngle in 0f..180f
 
-                                    // 🟢 ESCALA NATIVA REDUCIDA: 0.22 para un tamaño realista frente a los autos
-                                    val spriteScale = (0.15 * Math.pow(2.0, currentZoom - 19.0)).toFloat().coerceIn(0.05f, 1.0f)
+                                    // ESCALA NATIVA: 0.28 hace match exacto con el tamaño del jugador
+                                    val spriteScale = (0.18 * Math.pow(2.0, currentZoom - 18.5)).toFloat().coerceIn(0.15f, 0.35f)
 
                                     val drawable = ovh.gabrielhuav.pow.features.map_exterior.ui.components.CharacterSpriteManager.getModularNpcDrawable(
                                         context = context,
@@ -183,16 +180,17 @@ fun WorldMapScreen(
                                         isMoving = currentlyMoving,
                                         isFacingRight = isFacingRight,
                                         timeMs = timeMs,
-                                        scale = spriteScale
+                                        scale = spriteScale,
+                                        displayName = npc.displayName // Inyectamos nombre
                                     )
 
                                     marker.icon = drawable
-                                    marker.rotation = 0f // Los peatones no rotan espacialmente
+                                    marker.rotation = 0f
 
                                 } else if (npc.type == ovh.gabrielhuav.pow.domain.models.NpcType.CAR) {
-                                    // Lógica de autos
                                     marker.setAlpha(1f)
-                                    val dynamicScale = (1.6 * Math.pow(2.0, currentZoom - 19.0)).toFloat().coerceIn(0.1f, 1.8f)
+                                    // Los coches son base 1.4, los hace visualmente consistentes e imponentes
+                                    val dynamicScale = (1.4 * Math.pow(2.0, currentZoom - 19.0)).toFloat().coerceIn(0.2f, 2.5f)
                                     marker.icon = ovh.gabrielhuav.pow.features.map_exterior.ui.components.VehicleSpriteManager.getTintedCarNpc(
                                         context, npc.rotationAngle, npc.carColor, dynamicScale, npc.carModel
                                     )
@@ -260,12 +258,13 @@ fun WorldMapScreen(
                     val highResRenderScale = 1.0f * screenDensity
 
                     val npcsJson = uiState.npcs.joinToString(prefix = "[", postfix = "]") { npc ->
+                        // Filtro de null a string seguro
+                        val nameStr = npc.displayName?.let { "'$it'" } ?: "null"
+
                         if (npc.type == ovh.gabrielhuav.pow.domain.models.NpcType.CAR) {
                             var angle = npc.rotationAngle % 360f
                             if (angle < 0) angle += 360f
                             val frameIndex = (angle / 7.5f).roundToInt() % 48
-
-                            // La caché ahora solo depende del coche y su rotación, ignorando el zoom de Compose
                             val cacheKey = "${npc.carModel.name}_${frameIndex}_${npc.carColor}_${screenDensity}"
 
                             val base64Image = base64Cache.getOrPut(cacheKey) {
@@ -280,16 +279,13 @@ fun WorldMapScreen(
                                 } else { "" }
                             }
 
-                            // NO MANDAMOS 'sz'. JS lo calculará en tiempo real basado en su propio pellizco (pinch zoom)
+                            // Pasamos el 'name' al JS
                             "{id:'${npc.id}',lat:${npc.location.latitude},lng:${npc.location.longitude}," +
-                                    "rot:${npc.rotationAngle},type:'CAR',base64:'$base64Image'}"
+                                    "rot:${npc.rotationAngle},type:'CAR',base64:'$base64Image', name:$nameStr}"
 
                         } else if (npc.visualConfig != null) {
                             val timeMs = System.currentTimeMillis()
-
-                            // 1. Sabemos si se mueve comprobando si su velocidad es mayor a 0
                             val currentlyMoving = npc.speed > 0 || npc.isMoving
-
                             val frameIndex = if(currentlyMoving) ((timeMs / 150) % 6).toInt() else 0
                             val cacheKey = "npc_mod_${npc.id}_${currentlyMoving}_$frameIndex"
 
@@ -304,19 +300,17 @@ fun WorldMapScreen(
                                 } else { "" }
                             }
 
-                            // 2. Normalizamos el ángulo geográfico a 360 grados
                             val normalizedAngle = (npc.rotationAngle % 360f + 360f) % 360f
                             val isFacingRight = normalizedAngle in 0f..180f
                             val flipScale = if (isFacingRight) 1 else -1
 
-                            // TRUCO CLAVE: Enviamos type:'MODULAR' para que JS sepa que debe achicarlo
+                            // Pasamos el 'name' al JS
                             "{id:'${npc.id}',lat:${npc.location.latitude},lng:${npc.location.longitude}," +
-                                    "rot:0, type:'MODULAR', flip:$flipScale, base64:'$base64Image'}"
+                                    "rot:0, type:'MODULAR', flip:$flipScale, base64:'$base64Image', name:$nameStr}"
 
                         } else {
-                            // NPCs ORIGINALES ESTÁTICOS CON SVG ⚪
                             "{id:'${npc.id}',lat:${npc.location.latitude},lng:${npc.location.longitude}," +
-                                    "rot:${npc.rotationAngle},type:'${npc.type.name}',drawable:'${npc.type.drawableName}'}"
+                                    "rot:${npc.rotationAngle},type:'${npc.type.name}',drawable:'${npc.type.drawableName}', name:$nameStr}"
                         }
                     }
                     wv.evaluateJavascript("if(typeof updateNpcs==='function')updateNpcs($npcsJson);", null)
@@ -503,19 +497,28 @@ private fun buildHtml(lat: Double, lng: Double, zoom: Int): String = """
             if (!isZoomedIn) return;
         
             // Escala del Sprite base (tamaño para un auto)
-            var dynamicScale = 1.9 * Math.pow(2, currentZoom - 19);
-            dynamicScale = Math.max(0.1, Math.min(dynamicScale, 1.8));
-            var sz = Math.max(5, Math.round(80 * dynamicScale));
-        
-            // BUCLE ÚNICO CORREGIDO
+            var dynamicScale = 1.4 * Math.pow(2, currentZoom - 19);
+            dynamicScale = Math.max(0.6, Math.min(dynamicScale, 1.4));
+            var sz = Math.max(10, Math.round(110 * dynamicScale));
+            
             data.forEach(function(npc) {
-                // 🟢 Diferenciamos tamaño dinámico: Auto es el 100% (sz), Modular (Peatón) es el 35%, SVG viejo es fijo a 24
-                var finalSz = (npc.type === 'CAR') ? sz : Math.round(sz * 0.60);
+                // Modular es 35% de un coche = match con jugador
+                var finalSz = (npc.type === 'CAR') ? sz : Math.round(sz * 0.45);
         
+                // Etiqueta flotante NameTag
+                var nameTagHtml = '';
+                if (npc.name) {
+                    nameTagHtml = '<div style="position:absolute; top:-28px; ' + 
+                  'left:50%; transform:translateX(-50%); ' +
+                  'color:#D4AF37; ' + 
+                  'background:rgba(0,0,0,0.65); padding:2px 6px; border-radius:4px; ' +
+                  'font-size:16px; ' + 
+                  'font-weight:bold; white-space:nowrap; text-shadow:1px 1px 0 #000; z-index:100;">' + 
+                  npc.name + '</div>';
+                }
+
                 if (npcMarkers[npc.id]) {
-                    // Actualizamos coordenada geográfica real para evitar el rastro
                     npcMarkers[npc.id].setLatLng([npc.lat, npc.lng]);
-                    
                     var el = npcMarkers[npc.id].getElement();
                     if (el) {
                         var wrapper = el.querySelector('.npc-c');
@@ -523,35 +526,24 @@ private fun buildHtml(lat: Double, lng: Double, zoom: Int): String = """
                         
                         if ((npc.type === 'CAR' || npc.type === 'MODULAR') && img && wrapper) {
                             if (img.src !== npc.base64) img.src = npc.base64;
-                            // Aplicamos el tamaño diferenciado
                             wrapper.style.width = finalSz + 'px';
                             wrapper.style.height = finalSz + 'px';
-                            // Aplicamos la orientación visual
                             if (npc.flip !== undefined) img.style.transform = 'scaleX(' + npc.flip + ')';
                         } else if (wrapper && npc.type !== 'CAR' && npc.type !== 'MODULAR') {
-                            // Rotación para los SVG clásicos
                             wrapper.style.transform = 'translate(-50%, -50%) rotate(' + npc.rot + 'deg)';
                         }
                     }
                 } else {
-                    // Creación inicial del marcador
                     var html = '';
-                    
                     if (npc.type === 'CAR' || npc.type === 'MODULAR') {
-                        // 🟢 Tanto Autos como Modulares usan Base64 y respetan el espejeado (flip)
                         var flipStyle = (npc.flip !== undefined) ? 'transform: scaleX(' + npc.flip + ');' : '';
-                        html = '<div class="npc-c" style="position:absolute; transform: translate(-50%, -50%); width:'+finalSz+'px; height:'+finalSz+'px;"><img src="'+npc.base64+'" style="width:100%; height:100%; display:block; ' + flipStyle + '"></div>';
+                        html = '<div class="npc-c" style="position:absolute; transform: translate(-50%, -50%); width:'+finalSz+'px; height:'+finalSz+'px;">' + nameTagHtml + '<img src="'+npc.base64+'" style="width:100%; height:100%; display:block; ' + flipStyle + '"></div>';
                     } else {
-                        // Los estáticos mantienen la lógica de rotación
                         var pUrl = 'file:///android_asset/' + npc.drawable + '.svg';
-                        html = '<div class="npc-c" style="position:absolute; transform: translate(-50%, -50%) rotate('+npc.rot+'deg); width:24px; height:24px;"><img src="'+pUrl+'" style="width:100%; height:100%; display:block;"></div>';
+                        html = '<div class="npc-c" style="position:absolute; transform: translate(-50%, -50%) rotate('+npc.rot+'deg); width:24px; height:24px;">' + nameTagHtml + '<img src="'+pUrl+'" style="width:100%; height:100%; display:block;"></div>';
                     }
                     
-                    var icon = L.divIcon({ 
-                        html: html, 
-                        className: '', 
-                        iconSize: [0, 0] 
-                    });
+                    var icon = L.divIcon({ html: html, className: '', iconSize: [0, 0] });
                     npcMarkers[npc.id] = L.marker([npc.lat, npc.lng], { icon: icon }).addTo(map);
                 }
             });

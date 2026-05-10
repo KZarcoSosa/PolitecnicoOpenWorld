@@ -27,7 +27,7 @@ class NpcAiManager {
 
     private val maxNpcs = 40
     private val despawnDistance = 0.035
-    private val spawnDistance   = 0.0020
+    private val spawnDistance   = 0.0060
 
     private val carSpeed    = 0.000008
     private val personSpeed = 0.0000015
@@ -119,7 +119,7 @@ class NpcAiManager {
         val startNode   = selectedWay.nodes[startIndex]
 
         val distToPlayer = calculateDistance(startNode.lat, startNode.lon, playerLocation.latitude, playerLocation.longitude)
-        if (distToPlayer < 0.0001 || distToPlayer > 0.0008) return null
+        if (distToPlayer < 0.0002 || distToPlayer > 0.0040) return null
 
         val dir = if (startIndex == selectedWay.nodes.size - 1) -1 else 1
 
