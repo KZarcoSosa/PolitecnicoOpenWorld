@@ -77,13 +77,9 @@ fun WorldMapScreen(
         }
     }
 
-    DisposableEffect(Unit) {
-        viewModel.startGameLoop()
-        // Ya no conectamos automáticamente aquí, el MainActivity se encarga de eso.
-        onDispose {
-            viewModel.stopGameLoop()
-        }
-    }
+    // NOTA: El game loop ya NO se controla aquí. Se inicia en el `init` del ViewModel y
+    // se cancela en `onCleared`. Esto evita que navegar a Settings y volver detenga a
+    // los NPCs, porque el loop ya no depende del ciclo de vida del Composable.
 
     val tileCache = viewModel.tileCache
     val cachingClient = remember(tileCache) {
@@ -133,15 +129,13 @@ fun WorldMapScreen(
                         val timeMs = System.currentTimeMillis()
 
                         // 1. LIMPIEZA DE DESCONECTADOS/ELIMINADOS
-                        // Extraemos los IDs que existen actualmente en el estado
                         val currentNpcIds = uiState.npcs.map { it.id }.toSet()
                         val iterator = markerCache.iterator()
                         while (iterator.hasNext()) {
                             val entry = iterator.next()
-                            // Si el marcador en caché ya no existe en la lista de NPCs, lo borramos
                             if (!currentNpcIds.contains(entry.key)) {
-                                view.overlays.remove(entry.value) // Se quita del mapa visual
-                                iterator.remove()                 // Se quita de la memoria
+                                view.overlays.remove(entry.value)
+                                iterator.remove()
                             }
                         }
 
@@ -163,7 +157,6 @@ fun WorldMapScreen(
                                     val currentlyMoving = npc.speed > 0 || npc.isMoving
                                     val isFacingRight = npc.facingRight
 
-                                    // ESCALA NATIVA: 0.28 hace match exacto con el tamaño del jugador
                                     val spriteScale = (0.18 * Math.pow(2.0, currentZoom - 18.5)).toFloat().coerceIn(0.15f, 0.35f)
 
                                     val drawable = ovh.gabrielhuav.pow.features.map_exterior.ui.components.CharacterSpriteManager.getModularNpcDrawable(
@@ -173,7 +166,7 @@ fun WorldMapScreen(
                                         isFacingRight = isFacingRight,
                                         timeMs = timeMs,
                                         scale = spriteScale,
-                                        displayName = npc.displayName // Inyectamos nombre
+                                        displayName = npc.displayName
                                     )
 
                                     marker.icon = drawable
@@ -181,14 +174,12 @@ fun WorldMapScreen(
 
                                 } else if (npc.type == ovh.gabrielhuav.pow.domain.models.NpcType.CAR) {
                                     marker.setAlpha(1f)
-                                    // Los coches son base 1.4, los hace visualmente consistentes e imponentes
                                     val dynamicScale = (1.4 * Math.pow(2.0, currentZoom - 19.0)).toFloat().coerceIn(0.2f, 2.5f)
                                     marker.icon = ovh.gabrielhuav.pow.features.map_exterior.ui.components.VehicleSpriteManager.getTintedCarNpc(
                                         context, npc.rotationAngle, npc.carColor, dynamicScale, npc.carModel
                                     )
                                     marker.rotation = 0f
                                 } else {
-                                    // SVG Clásicos (viejos marcadores)
                                     marker.setAlpha(1f)
                                     val resId = context.resources.getIdentifier(npc.type.drawableName, "drawable", context.packageName)
                                     if (resId != 0) marker.icon = ContextCompat.getDrawable(context, resId)
@@ -226,7 +217,6 @@ fun WorldMapScreen(
                 modifier = Modifier.fillMaxSize(),
                 update = { wv ->
                     uiState.currentLocation?.let {
-                        // Combinamos Latitud, Longitud y Zoom en un solo disparo a JS
                         wv.evaluateJavascript("if(typeof updateMapView==='function')updateMapView(${it.latitude}, ${it.longitude}, ${uiState.zoomLevel.toInt()});", null)
                     }
 
@@ -244,9 +234,6 @@ fun WorldMapScreen(
 
                     // --- LA INYECCIÓN MAESTRA CORREGIDA ---
                     val screenDensity = context.resources.displayMetrics.density
-
-                    // Kotlin YA NO CALCULA escalas dinámicas que puedan quedarse estancadas.
-                    // Solo genera 1 imagen en ultra alta resolución (HiDPI pura) y se la avienta a JS.
                     val highResRenderScale = 1.0f * screenDensity
 
                     val npcPayloads = uiState.npcs.map { npc ->
@@ -334,7 +321,7 @@ fun WorldMapScreen(
             zoomLevel = uiState.zoomLevel,
             drivingCarModel = uiState.drivingCarModel,
             drivingCarColor = uiState.drivingCarColor,
-            playerAngle = uiState.playerAngle, // 🟢 PASAMOS EL ÁNGULO
+            playerAngle = uiState.playerAngle,
             modifier = Modifier.align(Alignment.Center)
         )
 
@@ -401,11 +388,9 @@ fun WorldMapScreen(
                 ActionButtonsController(
                     modifier = Modifier.scale(effectiveScale),
                     onActionChanged = { action, isPressed ->
-                        // Interceptamos la X solo cuando se presiona (no cuando se suelta)
                         if (isPressed && action == GameAction.X) {
                             viewModel.onInteractButtonPressed()
                         } else {
-                            // Los demás botones (A, B, Y) o cuando sueltas la X siguen igual
                             viewModel.updateActionState(action, isPressed)
                         }
                     }
@@ -490,14 +475,13 @@ private fun buildHtml(lat: Double, lng: Double, zoom: Int): String = """
         var npcMarkers = {};
 
         // --- SISTEMA ANTI-DESINCRONIZACIÓN ---
-        // Detectamos si el usuario está pellizcando la pantalla
         var isZooming = false;
         map.on('zoomstart', function() { isZooming = true; });
         map.on('zoomend', function() { isZooming = false; });
 
 
         function updateMapView(lat, lng, z) { 
-            if (!isZooming) { // Evitar tirones si el usuario está pellizcando
+            if (!isZooming) {
                 map.setView([lat, lng], z, { animate: false }); 
             }
         }
@@ -512,13 +496,11 @@ private fun buildHtml(lat: Double, lng: Double, zoom: Int): String = """
         }
 
         function updateNpcs(data) {
-            // CRÍTICO: Si Leaflet está haciendo su animación CSS de zoom, pausamos
             if (isZooming) return;
         
             var currentZoom = map.getZoom();
             var isZoomedIn = currentZoom >= 15.0;
             
-            // 1. CULLING Visual (Limpieza de marcadores fuera de rango)
             var ids = new Set();
             if (isZoomedIn) {
                 ids = new Set(data.map(function(n) { return n.id; }));
@@ -533,16 +515,13 @@ private fun buildHtml(lat: Double, lng: Double, zoom: Int): String = """
         
             if (!isZoomedIn) return;
         
-            // Escala del Sprite base (tamaño para un auto)
             var dynamicScale = 1.4 * Math.pow(2, currentZoom - 19);
             dynamicScale = Math.max(0.6, Math.min(dynamicScale, 1.4));
             var sz = Math.max(10, Math.round(110 * dynamicScale));
             
             data.forEach(function(npc) {
-                // Modular es 35% de un coche = match con jugador
                 var finalSz = (npc.type === 'CAR') ? sz : Math.round(sz * 0.45);
         
-                // Etiqueta flotante NameTag
                 var nameTagHtml = '';
                 if (npc.name) {
                     var safeName = escapeHtml(npc.name);

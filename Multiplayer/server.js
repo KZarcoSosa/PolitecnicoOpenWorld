@@ -108,6 +108,13 @@ wss.on('connection', (ws) => {
     console.log(`[+] Cliente conectado. ID: ${ws.sessionId}`);
     ws.send(JSON.stringify({ type: 'SESSION_INIT', sessionId: ws.sessionId }));
 
+    // Notificación de rol inicial.
+    // ws.isHost se inicializa en true, pero el cliente nunca lo sabría sin esto:
+    // los ROLE_UPDATE posteriores solo se envían cuando el rol CAMBIA, así que
+    // sin este mensaje inicial el cliente jamás activaría isServerDelegatedHost
+    // y nadie spawnearía NPCs.
+    ws.send(JSON.stringify({ type: 'ROLE_UPDATE', isZoneHost: ws.isHost }));
+
     // Responder al ping del servidor para mantener la conexión activa
     ws.on('pong', () => { ws.isAlive = true; });
 

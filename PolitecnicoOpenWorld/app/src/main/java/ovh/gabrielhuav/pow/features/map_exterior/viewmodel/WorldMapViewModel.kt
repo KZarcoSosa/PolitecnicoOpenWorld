@@ -2,6 +2,7 @@ package ovh.gabrielhuav.pow.features.map_exterior.viewmodel
 
 import android.content.Context
 import android.util.Log
+import androidx.compose.ui.graphics.toArgb
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import kotlinx.coroutines.Job
@@ -56,7 +57,13 @@ data class MultiplayerPlayer(
     val facingRight: Boolean
 )
 
-// Clase para empaquetar un NPC en el JSON
+// Clase para empaquetar un NPC en el JSON.
+//
+// IMPORTANTE: hairColor / shirtColor / pantsColor se serializan como Int ARGB (no como
+// Long con el valor ULong interno de Compose Color). El valor de Compose Color codifica
+// el ColorSpace en los bits altos; serializarlo como Long y reconstruir con Color(ULong)
+// puede producir un ColorSpace inválido y hacer crashear toArgb() con
+// ArrayIndexOutOfBoundsException. Usar Int ARGB es seguro y siempre interpreta sRGB.
 data class MultiplayerNpc(
     val id: String,
     val x: Double,
@@ -67,9 +74,9 @@ data class MultiplayerNpc(
     val carModel: String? = null,
     val carColor: Int? = null,
     val hairId: Int? = null,
-    val hairColor: Long? = null,
-    val shirtColor: Long? = null,
-    val pantsColor: Long? = null
+    val hairColor: Int? = null,
+    val shirtColor: Int? = null,
+    val pantsColor: Int? = null
 )
 
 // Modelo unificado para todos los mensajes del servidor
@@ -132,6 +139,12 @@ class WorldMapViewModel(
 
     private val REFETCH_DISTANCE_DEG = 0.015
     private val REFETCH_COOLDOWN_MS  = 5 * 60 * 1000L
+
+    // El game loop arranca aquí, atado al ciclo de vida del ViewModel (no del Composable).
+    // Así, navegar a Settings y volver no detiene a los NPCs.
+    init {
+        startGameLoop()
+    }
 
 // ─── WEBSOCKET MULTIJUGADOR ───────────────────────────────────────────────────
 
@@ -253,7 +266,7 @@ class WorldMapViewModel(
                     // Si es una actualización de posición de otro JUGADOR (sin type específico)
                     if (msg.id != null && msg.id != myPlayerUUID && msg.x != null && msg.y != null) {
 
-                        //  Verificamos si el servidor nos dice que está caminando o corriendo
+                        // Verificamos si el servidor nos dice que está caminando o corriendo
                         val isRemoteMoving = msg.action == "WALK" || msg.action == "RUN"
 
                         val multiplayerConfig = ovh.gabrielhuav.pow.domain.models.CharacterVisualConfig(
@@ -272,7 +285,7 @@ class WorldMapViewModel(
                             rotationAngle = 0f,
                             speed = 0.0,
                             isRemote = true,
-                            isMoving = isRemoteMoving, // 🟢 AHORA ES DINÁMICO
+                            isMoving = isRemoteMoving,
                             facingRight = msg.facingRight == true,
                             visualConfig = multiplayerConfig,
                             displayName = msg.displayName
@@ -292,25 +305,32 @@ class WorldMapViewModel(
         val npcType = try { NpcType.valueOf(remote.npcType) } catch(e: Exception) { NpcType.PERSON }
 
         // Interpretar el modelo y el color de autos
-        val cModel = try { remote.carModel?.let { ovh.gabrielhuav.pow.domain.models.CarModel.valueOf(it) } ?: ovh.gabrielhuav.pow.domain.models.CarModel.SEDAN } catch (e: Exception) { ovh.gabrielhuav.pow.domain.models.CarModel.SEDAN }
+        val cModel = try {
+            remote.carModel?.let { ovh.gabrielhuav.pow.domain.models.CarModel.valueOf(it) }
+                ?: ovh.gabrielhuav.pow.domain.models.CarModel.SEDAN
+        } catch (e: Exception) { ovh.gabrielhuav.pow.domain.models.CarModel.SEDAN }
         val cColor = remote.carColor ?: 0xFFFFFFFF.toInt()
 
+        // Reconstrucción de colores: los campos llegan como Int ARGB (ver MultiplayerNpc).
+        // Color(Int) interpreta el entero como ARGB sRGB sin tocar bits de ColorSpace,
+        // por lo que es seguro vs. Color(ULong) que asume el formato binario interno.
         val visualConfig = if (npcType == NpcType.PERSON) {
             ovh.gabrielhuav.pow.domain.models.CharacterVisualConfig(
                 bodyFolder = "npc_walk_1",
                 bodyPrefix = "npc_walk_1_",
                 hairId = remote.hairId ?: 1,
-                hairColor = remote.hairColor?.let { androidx.compose.ui.graphics.Color(it.toULong()) } ?: androidx.compose.ui.graphics.Color.White,
-                shirtColor = remote.shirtColor?.let { androidx.compose.ui.graphics.Color(it.toULong()) } ?: androidx.compose.ui.graphics.Color.LightGray,
-                pantsColor = remote.pantsColor?.let { androidx.compose.ui.graphics.Color(it.toULong()) } ?: androidx.compose.ui.graphics.Color.DarkGray
+                hairColor  = remote.hairColor?.let  { androidx.compose.ui.graphics.Color(it) } ?: androidx.compose.ui.graphics.Color.White,
+                shirtColor = remote.shirtColor?.let { androidx.compose.ui.graphics.Color(it) } ?: androidx.compose.ui.graphics.Color.LightGray,
+                pantsColor = remote.pantsColor?.let { androidx.compose.ui.graphics.Color(it) } ?: androidx.compose.ui.graphics.Color.DarkGray
             )
         } else null
 
         val isMoving = npcType == NpcType.PERSON
         val facingRight = cos(Math.toRadians(remote.rotation.toDouble())) >= 0
 
-        // Asignar velocidad real para que el nuevo Host pueda moverlos
-        val restoredSpeed = if (npcType == NpcType.CAR) 0.000015 else 0.000004
+        // Velocidad canónica de NpcAiManager. Antes había constantes locales distintas que
+        // aceleraban los NPCs adoptados cada vez que entraba un nuevo jugador a la zona.
+        val restoredSpeed = if (npcType == NpcType.CAR) NpcAiManager.CAR_SPEED else NpcAiManager.PERSON_SPEED
 
         remoteEntities[remote.id] = Npc(
             id = remote.id,
@@ -379,7 +399,7 @@ class WorldMapViewModel(
 
             // Game loop principal ~30fps
             while (isActive) {
-                try { // 🛡ESCUDO ANTI-CRASHEO INICIADO
+                try { // ESCUDO ANTI-CRASHEO INICIADO
                     _uiState.value.currentLocation?.let { location ->
                         maybeRefetchRoadNetwork(location)
                         if (_uiState.value.isRoadNetworkReady) {
@@ -427,15 +447,21 @@ class WorldMapViewModel(
                                                 }
 
                                                 if (processedNpcs.isNotEmpty()) {
+                                                    // Colores serializados como Int ARGB para evitar corrupción de ColorSpace.
                                                     val npcBatch = processedNpcs.map { npc ->
                                                         MultiplayerNpc(
-                                                            id = npc.id, x = npc.location.longitude, y = npc.location.latitude,
-                                                            rotation = npc.rotationAngle, npcType = npc.type.name,
-                                                            ownerId = myPlayerUUID, carModel = npc.carModel?.name, carColor = npc.carColor,
+                                                            id = npc.id,
+                                                            x = npc.location.longitude,
+                                                            y = npc.location.latitude,
+                                                            rotation = npc.rotationAngle,
+                                                            npcType = npc.type.name,
+                                                            ownerId = myPlayerUUID,
+                                                            carModel = npc.carModel?.name,
+                                                            carColor = npc.carColor,
                                                             hairId = npc.visualConfig?.hairId,
-                                                            hairColor = npc.visualConfig?.hairColor?.value?.toLong(),
-                                                            shirtColor = npc.visualConfig?.shirtColor?.value?.toLong(),
-                                                            pantsColor = npc.visualConfig?.pantsColor?.value?.toLong()
+                                                            hairColor = npc.visualConfig?.hairColor?.toArgb(),
+                                                            shirtColor = npc.visualConfig?.shirtColor?.toArgb(),
+                                                            pantsColor = npc.visualConfig?.pantsColor?.toArgb()
                                                         )
                                                     }
                                                     ws.sendMessage(gson.toJson(mapOf("type" to "NPC_BATCH_UPDATE", "npcs" to npcBatch)))
@@ -545,7 +571,7 @@ class WorldMapViewModel(
         startMovementAction(isMovingRight)
         startMovementAction(isMovingRight)
 
-        // 🟢 CALCULAR Y ACTUALIZAR ÁNGULO D-PAD
+        // CALCULAR Y ACTUALIZAR ÁNGULO D-PAD
         val newAngle = when (direction) {
             Direction.UP -> 0f
             Direction.RIGHT -> 90f
@@ -584,7 +610,7 @@ class WorldMapViewModel(
         val isMovingRight = if (abs(dx) > 0.01) dx > 0 else null
         startMovementAction(isMovingRight)
 
-        // 🟢 CALCULAR Y ACTUALIZAR ÁNGULO JOYSTICK (Rotación libre 360°)
+        // CALCULAR Y ACTUALIZAR ÁNGULO JOYSTICK (Rotación libre 360°)
         val degrees = Math.toDegrees(angleRad).toFloat()
         // Convertimos el ángulo matemático al ángulo de la brújula (0 = Arriba, 90 = Derecha)
         val spriteAngle = (90f - degrees + 360f) % 360f
@@ -726,6 +752,7 @@ class WorldMapViewModel(
 
     override fun onCleared() {
         super.onCleared()
+        stopGameLoop()
         tileCache.closeAll()
         webSocketManager?.disconnect()
     }
@@ -756,7 +783,6 @@ class WorldMapViewModel(
         }
     }
 
-    // Agrega esta función en tu WorldMapViewModel
     fun onInteractButtonPressed() {
         val currentState = _uiState.value
         val playerLocation = currentState.currentLocation ?: return
@@ -776,7 +802,6 @@ class WorldMapViewModel(
 
             npcAiManager.addSpecificNpc(abandonedCar)
 
-            // Usamos .update para modificar el StateFlow de forma segura
             _uiState.update {
                 it.copy(
                     drivingCarModel = null,
@@ -806,7 +831,6 @@ class WorldMapViewModel(
                 if (dist <= interactDistance) {
                     npcAiManager.removeNpc(nearbyCar.id)
 
-                    // Usamos .update para modificar el StateFlow de forma segura
                     _uiState.update {
                         it.copy(
                             drivingCarModel = nearbyCar.carModel,
@@ -817,7 +841,7 @@ class WorldMapViewModel(
             }
         }
     }
-    // Helper matemático para calcular distancia (ponlo al final de tu ViewModel)
+
     private fun calculateDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
         val dLat = lat1 - lat2
         val dLon = (lon1 - lon2) * cos(lat1 * Math.PI / 180)
