@@ -170,7 +170,7 @@ class WorldMapViewModel(
         updateNpcsState()
     }
 
-    private var isServerDelegatedHost = true
+    private var isServerDelegatedHost = false
     private fun handleMultiplayerMessage(messageJson: String) {
         try {
             val msg = gson.fromJson(messageJson, ServerMessage::class.java)
