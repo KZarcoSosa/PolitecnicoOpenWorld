@@ -196,8 +196,11 @@ wss.on('connection', (ws) => {
             // --- Eliminación de un NPC ---
             else if (data && data.type === "NPC_DESTROY") {
                 if (data.npcId) {
-                    npcs.delete(data.npcId);
-                    broadcastToOthers(ws, messageAsString);
+                    const npcToDelete = npcs.get(data.npcId);
+                    if (npcToDelete && npcToDelete.ownerId === ws.sessionId) {
+                        npcs.delete(data.npcId);
+                        broadcastToOthers(ws, messageAsString);
+                    }
                 }
             }
         } catch (e) {
