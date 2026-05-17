@@ -31,6 +31,9 @@ import ovh.gabrielhuav.pow.domain.models.NpcType
 import ovh.gabrielhuav.pow.domain.models.ai.NpcAiManager
 import ovh.gabrielhuav.pow.features.map_exterior.ui.components.PlayerAction
 import ovh.gabrielhuav.pow.features.settings.models.ControlType
+import ovh.gabrielhuav.pow.data.local.room.entity.LandmarkEntity
+import ovh.gabrielhuav.pow.domain.models.Landmark
+import ovh.gabrielhuav.pow.domain.models.LandmarkAssetTemplate
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -596,12 +599,12 @@ class WorldMapViewModel(
             _uiState.update { it.copy(currentLocation = snapped, isRoadNetworkReady = true) }
         }
         val targetZoom = if (_uiState.value.mapProvider.isWebProvider)
-            WorldMapState.ZOOM_GAMEPLAY_WEB
+            ZOOM_GAMEPLAY_WEB
         else
-            WorldMapState.ZOOM_GAMEPLAY_OSM
+            ZOOM_GAMEPLAY_OSM
 
-        if (_uiState.value.zoomLevel <= WorldMapState.ZOOM_LOADING) {
-            var z = WorldMapState.ZOOM_LOADING + 1.0
+        if (_uiState.value.zoomLevel <= ZOOM_LOADING) {
+            var z = ZOOM_LOADING + 1.0
             while (z <= targetZoom) {
                 delay(120)
                 withContext(Dispatchers.Main) { _uiState.update { it.copy(zoomLevel = z) } }
@@ -817,10 +820,10 @@ class WorldMapViewModel(
         val ts = if (provider == MapProvider.OSM) TileSource.LOCAL_OSM else TileSource.NETWORK
         val currentZoom = _uiState.value.zoomLevel
         val newZoom = when {
-            provider == MapProvider.OSM && currentZoom < WorldMapState.ZOOM_GAMEPLAY_OSM ->
-                WorldMapState.ZOOM_GAMEPLAY_OSM
-            provider.isWebProvider && currentZoom > WorldMapState.ZOOM_GAMEPLAY_WEB ->
-                WorldMapState.ZOOM_GAMEPLAY_WEB
+            provider == MapProvider.OSM && currentZoom < ZOOM_GAMEPLAY_OSM ->
+                ZOOM_GAMEPLAY_OSM
+            provider.isWebProvider && currentZoom > ZOOM_GAMEPLAY_WEB ->
+                ZOOM_GAMEPLAY_WEB
             else -> currentZoom
         }
         _uiState.update { it.copy(mapProvider = provider, tileSource = ts, zoomLevel = newZoom) }
@@ -867,6 +870,7 @@ class WorldMapViewModel(
             }
         }
     }
+
     fun onInteractButtonPressed() {
         val loc = _uiState.value.currentLocation ?: return
 
@@ -930,6 +934,169 @@ class WorldMapViewModel(
             updateNpcsState()
         }
     }
+
+    fun loadLandmarks(context: Context) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val database = PowDatabase.getInstance(context)
+                val dao = database.landmarkDao()
+                var entities = dao.getAllLandmarks()
+
+                if (entities.isEmpty()) {
+                    val escomDefault = LandmarkEntity(
+                        name = "ESCOM",
+                        latitude = 19.504505,
+                        longitude = -99.146911,
+                        assetPath = "BUILDINGS/IPN/building_escom.webp",
+                        scaleFactor = 0.15f
+                    )
+                    dao.insertLandmarks(listOf(escomDefault))
+                    entities = dao.getAllLandmarks()
+                }
+
+                val domainLandmarks = entities.map { entity ->
+                    Landmark(
+                        id = entity.id,
+                        name = entity.name,
+                        location = GeoPoint(entity.latitude, entity.longitude),
+                        assetPath = entity.assetPath,
+                        scaleFactor = entity.scaleFactor,
+                        rotationAngle = entity.rotationAngle
+                    )
+                }
+
+                android.util.Log.d("Landmarks", "Cargados ${domainLandmarks.size} landmarks desde Room")
+
+                _uiState.update { currentState ->
+                    currentState.copy(landmarks = domainLandmarks)
+                }
+            } catch (e: Exception) {
+                Log.e("WorldMapViewModel", "Error al cargar las estructuras estáticas", e)
+            }
+        }
+    }
+
+    // ─── MODO DISEÑADOR ──────────────────────────────────────────────────────
+
+    fun toggleDesignerMode(isDesigner: Boolean) {
+        _uiState.update { it.copy(isDesignerMode = isDesigner, selectedLandmarkId = if (!isDesigner) null else it.selectedLandmarkId) }
+    }
+
+    fun showAssetPicker(show: Boolean) {
+        _uiState.update { it.copy(showAssetPicker = show) }
+    }
+
+    fun selectLandmark(id: Long?) {
+        _uiState.update { it.copy(selectedLandmarkId = id) }
+    }
+
+    fun addLandmarkAtPlayer(context: Context, template: LandmarkAssetTemplate) {
+        val playerLoc = _uiState.value.currentLocation ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val dao = PowDatabase.getInstance(context).landmarkDao()
+                val newEntity = LandmarkEntity(
+                    name = template.displayName,
+                    latitude = playerLoc.latitude,
+                    longitude = playerLoc.longitude,
+                    assetPath = template.assetPath,
+                    scaleFactor = template.defaultScale,
+                    rotationAngle = 0f
+                )
+                val newId = dao.insertLandmark(newEntity)
+
+                // Recargar para que aparezca en el mapa
+                loadLandmarks(context)
+
+                _uiState.update { it.copy(showAssetPicker = false, selectedLandmarkId = newId) }
+            } catch (e: Exception) {
+                Log.e("WorldMapViewModel", "Error al agregar landmark", e)
+            }
+        }
+    }
+
+    fun moveSelectedLandmark(dLat: Double, dLon: Double) {
+        val id = _uiState.value.selectedLandmarkId ?: return
+        _uiState.update { state ->
+            val updated = state.landmarks.map {
+                if (it.id == id) {
+                    it.copy(location = GeoPoint(it.location.latitude + dLat, it.location.longitude + dLon))
+                } else it
+            }
+            state.copy(landmarks = updated)
+        }
+    }
+
+    fun rotateSelectedLandmark(angle: Float) {
+        val id = _uiState.value.selectedLandmarkId ?: return
+        _uiState.update { state ->
+            val updated = state.landmarks.map {
+                if (it.id == id) it.copy(rotationAngle = angle)
+                else it
+            }
+            state.copy(landmarks = updated)
+        }
+    }
+
+    fun scaleSelectedLandmark(scale: Float) {
+        val id = _uiState.value.selectedLandmarkId ?: return
+        _uiState.update { state ->
+            val updated = state.landmarks.map {
+                if (it.id == id) it.copy(scaleFactor = scale)
+                else it
+            }
+            state.copy(landmarks = updated)
+        }
+    }
+
+    fun deleteSelectedLandmark(context: Context) {
+        val id = _uiState.value.selectedLandmarkId ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val dao = PowDatabase.getInstance(context).landmarkDao()
+                val entity = dao.getLandmarkById(id)
+                if (entity != null) {
+                    dao.deleteLandmark(entity)
+                    loadLandmarks(context)
+                    _uiState.update { it.copy(selectedLandmarkId = null) }
+                }
+            } catch (e: Exception) {
+                Log.e("WorldMapViewModel", "Error al borrar landmark", e)
+            }
+        }
+    }
+
+    fun saveSelectedLandmark(context: Context) {
+        val id = _uiState.value.selectedLandmarkId ?: return
+        val currentLandmark = _uiState.value.landmarks.find { it.id == id } ?: return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val dao = PowDatabase.getInstance(context).landmarkDao()
+
+                // Mapear el objeto de dominio (Landmark) de regreso a la Entidad (LandmarkEntity)
+                val updatedEntity = LandmarkEntity(
+                    id = currentLandmark.id,
+                    name = currentLandmark.name,
+                    latitude = currentLandmark.location.latitude,
+                    longitude = currentLandmark.location.longitude,
+                    assetPath = currentLandmark.assetPath,
+                    scaleFactor = currentLandmark.scaleFactor,
+                    rotationAngle = currentLandmark.rotationAngle
+                )
+
+                // Ejecutar el update en la base de datos
+                dao.updateLandmark(updatedEntity)
+
+                // Opcional: Deseleccionar el asset automáticamente al guardar
+                // _uiState.update { it.copy(selectedLandmarkId = null) }
+
+            } catch (e: Exception) {
+                Log.e("WorldMapViewModel", "Error al actualizar landmark", e)
+            }
+        }
+    }
+
     // Genera un NPC peatón asustado/desalojado al lado del auto
     private fun spawnOustedDriver(carLocation: GeoPoint) {
         val offsetLoc = GeoPoint(carLocation.latitude + 0.00005, carLocation.longitude + 0.00005)
@@ -968,6 +1135,21 @@ class WorldMapViewModel(
         )
         remoteEntities[driver.id] = driver
     }
+
+    fun toggleTeleportMenu(show: Boolean) {
+        _uiState.update { it.copy(showTeleportMenu = show) }
+    }
+
+    fun teleportTo(lat: Double, lon: Double) {
+        val newLocation = GeoPoint(lat, lon)
+        _uiState.update {
+            it.copy(
+                currentLocation = newLocation,
+                showTeleportMenu = false // Cerramos el menú tras hacer TP
+            )
+        }
+    }
+
     fun steerLeft(pressed: Boolean) { isSteeringLeftPressed = pressed }
     fun steerRight(pressed: Boolean) { isSteeringRightPressed = pressed }
     fun accelerate(pressed: Boolean) { isGasPressed = pressed }

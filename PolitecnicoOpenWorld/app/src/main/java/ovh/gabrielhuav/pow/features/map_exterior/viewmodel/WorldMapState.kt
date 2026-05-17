@@ -3,8 +3,13 @@ package ovh.gabrielhuav.pow.features.map_exterior.viewmodel
 import org.osmdroid.util.GeoPoint
 import ovh.gabrielhuav.pow.domain.models.CarModel
 import ovh.gabrielhuav.pow.domain.models.Npc
+import ovh.gabrielhuav.pow.domain.models.Landmark
 import ovh.gabrielhuav.pow.features.map_exterior.ui.components.PlayerAction
 import ovh.gabrielhuav.pow.features.settings.models.ControlType
+
+const val ZOOM_LOADING = 18.0
+const val ZOOM_GAMEPLAY_OSM = 20.0  // Nivel de zoom para OSMDroid Nativo
+const val ZOOM_GAMEPLAY_WEB = 19.0 // Nivel de zoom para los proveedores Web
 
 enum class MapProvider(val displayName: String) {
     OSM("OSMDroid (Nativo)"),
@@ -33,7 +38,7 @@ data class WorldMapState(
     val roadSource: RoadSource = RoadSource.LOADING,
     val tileSource: TileSource = TileSource.NETWORK,
     val showCacheWidget: Boolean = true,
-    val showFpsWidget: Boolean = false, // ← Agregado
+    val showFpsWidget: Boolean = false,
     val controlType: ControlType = ControlType.DPAD,
     val controlsScale: Float = 1.0f,
     val swapControls: Boolean = false,
@@ -46,12 +51,13 @@ data class WorldMapState(
     val currentVehicleModel: CarModel? = null,
     val currentVehicleColor: Int? = null,
     val vehicleSpeed: Double = 0.0,
-    val vehicleRotation: Float = 0f, // Para los 48 frames del coche
-    val vehicleIsFirstTimeBoarded: Boolean = true
-    ) {
-    companion object {
-        const val ZOOM_LOADING        = 17.0
-        const val ZOOM_GAMEPLAY_OSM   = 21.0
-        const val ZOOM_GAMEPLAY_WEB   = 18.0
-    }
-}
+    val vehicleRotation: Float = 0f,
+    val vehicleIsFirstTimeBoarded: Boolean = true,
+    val landmarks: List<Landmark> = emptyList(),
+    val showTeleportMenu: Boolean = false,
+
+    // ─── MODO DISEÑADOR ──────────────────────────────────────────────────────
+    val isDesignerMode: Boolean = false,
+    val selectedLandmarkId: Long? = null,     // null = nada seleccionado
+    val showAssetPicker: Boolean = false      // diálogo para agregar nuevo asset
+)
