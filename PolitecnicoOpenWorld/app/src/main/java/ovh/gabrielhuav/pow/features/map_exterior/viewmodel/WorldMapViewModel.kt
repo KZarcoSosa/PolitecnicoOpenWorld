@@ -123,17 +123,14 @@ class WorldMapViewModel(
         private set
     val maxPlayerHealth = 100f
 
-    var showHealthBar by mutableStateOf(true)
+    var showHealthBar by mutableStateOf(false)
         private set
+    private var hasShownInitialHealthBar by mutableStateOf(false)
     var damagePulseTrigger by mutableStateOf(0) // Cambia para disparar la animación de golpe
         private set
 
     private var healthBarJob: Job? = null
 
-    init {
-        // Al iniciar el juego, mostramos la barra por 4 segundos y luego la ocultamos
-        startHealthBarTimer(4000L)
-    }
 
     class Factory(private val context: Context) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
@@ -182,6 +179,14 @@ class WorldMapViewModel(
     private val ACCELERATION = 0.0000003
     private val BRAKING_FRICTION = 0.000001
     private val INTERACT_RADIUS = 0.0005 // Rango para detectar autos
+
+    private val PLAYER_PUNCH_DAMAGE = 15f
+
+    private var lastAttackTime = 0L
+
+    private val ATTACK_COOLDOWN_MS = 2400L // Tiempo entre cada puñetazo para sincronizar con la animación
+
+    private val ATTACK_RADIUS = 0.00015     // Radio geográfico de alcance del golpe (corta distancia)
 
     // El game loop arranca aquí, atado al ciclo de vida del ViewModel (no del Composable).
     // Así, navegar a Settings y volver no detiene a los NPCs.
@@ -459,6 +464,11 @@ class WorldMapViewModel(
                 try { // ESCUDO ANTI-CRASHEO INICIADO
                     _uiState.value.currentLocation?.let { location ->
 
+                        // --- CONDICIÓN DE COMBATE ---
+                        if (_uiState.value.playerAction == PlayerAction.SPECIAL) {
+                            performPlayerAttack()
+                        }
+
                         // --- LÓGICA DE CONDUCCIÓN DEL JUGADOR ---
                         if (_uiState.value.isDriving) {
                             var currentSpeed = _uiState.value.vehicleSpeed
@@ -520,6 +530,10 @@ class WorldMapViewModel(
 
                         maybeRefetchRoadNetwork(location)
                         if (_uiState.value.isRoadNetworkReady) {
+                            fun showInitialHealthBar() {
+                                showHealthBar = true
+                                startHealthBarTimer(4000L)
+                            }
                             tickCount++
                             if (tickCount % 3 == 0) {
                                 // 1. Damos SOLO los NPCs a la IA (Filtrando posibles jugadores basura)
@@ -1249,5 +1263,61 @@ class WorldMapViewModel(
 
     private fun triggerWastedSequence() {
         // Aquí implementaremos la Fase 3: Pantalla "WASTED" y búsqueda de hospital
+    }
+
+    fun showInitialHealthBar() {
+        showHealthBar = true
+        startHealthBarTimer(4000L)
+    }
+
+    fun performPlayerAttack() {
+        val now = System.currentTimeMillis()
+        if (now - lastAttackTime < ATTACK_COOLDOWN_MS) return
+        lastAttackTime = now
+
+
+        // 🌟 Envolvemos en una corrutina para sincronizar con la animación visual
+        viewModelScope.launch(Dispatchers.Default) {
+
+            delay(300L) // Esperamos 300ms a que el puño "conecte" en la animación
+
+            val playerLoc = _uiState.value.currentLocation ?: return@launch
+
+            // Solo atacamos si NO está muriendo, está en rango, Y ES UNA PERSONA
+            val targetNpcEntry = remoteEntities.entries
+                .filter { !it.value.isDying && it.value.type == NpcType.PERSON && distance(playerLoc, it.value.location) <= ATTACK_RADIUS }
+                .minByOrNull { distance(playerLoc, it.value.location) }
+
+            if (targetNpcEntry != null) {
+                val npcId = targetNpcEntry.key
+                val currentNpc = targetNpcEntry.value
+
+                val damage = PLAYER_PUNCH_DAMAGE
+                val newHealth = (currentNpc.health - damage).coerceAtLeast(0f)
+
+                if (newHealth <= 0f) {
+                    // Inicia muerte progresiva
+                    remoteEntities[npcId] = currentNpc.copy(health = 0f, isDying = true)
+                    updateNpcsState()
+
+                    delay(1000L) // Espera a que termine el fade-out
+                    remoteEntities.remove(npcId)
+
+                    if (isServerDelegatedHost) {
+                        try {
+                            webSocketManager?.sendMessage(
+                                gson.toJson(mapOf("type" to "NPC_DESTROY", "npcId" to npcId))
+                            )
+                        } catch (e: Exception) {
+                            Log.e("Combat", "Error enviando NPC_DESTROY: ${e.message}")
+                        }
+                    }
+                    updateNpcsState()
+                } else {
+                    remoteEntities[npcId] = currentNpc.copy(health = newHealth)
+                    updateNpcsState()
+                }
+            }
+        }
     }
 }
