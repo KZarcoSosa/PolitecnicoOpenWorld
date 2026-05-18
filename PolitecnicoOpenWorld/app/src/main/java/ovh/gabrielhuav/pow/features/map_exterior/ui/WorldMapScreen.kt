@@ -556,7 +556,10 @@ fun WorldMapScreen(
         // ─── CAPA 2: Personaje principal ────────────────────────────────────
         ovh.gabrielhuav.pow.features.map_exterior.ui.components.PlayerCharacter(
             uiState = uiState,
-            modifier = Modifier.align(Alignment.Center)
+            modifier = Modifier.align(Alignment.Center),
+            health = viewModel.playerHealth,
+            showHealthBar = viewModel.showHealthBar,
+            damagePulseTrigger = viewModel.damagePulseTrigger
         )
 
         if (!uiState.isRoadNetworkReady) {

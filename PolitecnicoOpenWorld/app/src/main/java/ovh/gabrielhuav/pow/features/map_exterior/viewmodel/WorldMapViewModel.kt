@@ -2,6 +2,7 @@ package ovh.gabrielhuav.pow.features.map_exterior.viewmodel
 
 import android.content.Context
 import android.util.Log
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.toArgb
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -46,6 +47,8 @@ import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.math.abs
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 enum class Direction { UP, DOWN, LEFT, RIGHT }
 enum class GameAction { A, B, X, Y }
 
@@ -115,6 +118,22 @@ class WorldMapViewModel(
     val tileCache: TileCache,
     private val settingsRepository: SettingsRepository
 ) : ViewModel() {
+
+    var playerHealth by mutableStateOf(100f)
+        private set
+    val maxPlayerHealth = 100f
+
+    var showHealthBar by mutableStateOf(true)
+        private set
+    var damagePulseTrigger by mutableStateOf(0) // Cambia para disparar la animación de golpe
+        private set
+
+    private var healthBarJob: Job? = null
+
+    init {
+        // Al iniciar el juego, mostramos la barra por 4 segundos y luego la ocultamos
+        startHealthBarTimer(4000L)
+    }
 
     class Factory(private val context: Context) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
@@ -1196,4 +1215,39 @@ class WorldMapViewModel(
     fun steerRight(pressed: Boolean) { isSteeringRightPressed = pressed }
     fun accelerate(pressed: Boolean) { isGasPressed = pressed }
     fun brake(pressed: Boolean) { isBrakePressed = pressed }
+
+    fun takeDamage(amount: Float) {
+        playerHealth = (playerHealth - amount).coerceAtLeast(0f)
+        damagePulseTrigger++ // Dispara el efecto visual
+        showHealthBar = true
+
+        // Si la vida es menor al 30%, no ocultamos la barra (estado crítico)
+        if (playerHealth > 30f) {
+            startHealthBarTimer(3000L) // Ocultar después de 3 segundos de no recibir daño
+        } else {
+            healthBarJob?.cancel() // Se queda visible permanentemente
+        }
+
+        if (playerHealth <= 0f) {
+            triggerWastedSequence() // Lógica futura para morir
+        }
+    }
+
+    fun heal(amount: Float) {
+        playerHealth = (playerHealth + amount).coerceAtMost(maxPlayerHealth)
+        showHealthBar = true
+        startHealthBarTimer(3000L)
+    }
+
+    private fun startHealthBarTimer(delayMillis: Long) {
+        healthBarJob?.cancel()
+        healthBarJob = viewModelScope.launch {
+            delay(delayMillis)
+            showHealthBar = false
+        }
+    }
+
+    private fun triggerWastedSequence() {
+        // Aquí implementaremos la Fase 3: Pantalla "WASTED" y búsqueda de hospital
+    }
 }
