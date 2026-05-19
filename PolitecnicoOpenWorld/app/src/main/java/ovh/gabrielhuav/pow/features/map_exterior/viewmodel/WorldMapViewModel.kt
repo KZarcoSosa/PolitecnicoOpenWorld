@@ -47,9 +47,6 @@ import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.math.abs
-import ovh.gabrielhuav.pow.data.repository.CollectibleRepository
-import ovh.gabrielhuav.pow.domain.models.ActiveCollectible
-
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 enum class Direction { UP, DOWN, LEFT, RIGHT }
@@ -119,8 +116,7 @@ private data class ServerMessage(
 class WorldMapViewModel(
     private val roadNetworkCache: RoadNetworkCache,
     val tileCache: TileCache,
-    private val settingsRepository: SettingsRepository,
-    private val collectibleRepository: CollectibleRepository
+    private val settingsRepository: SettingsRepository
 ) : ViewModel() {
 
     var playerHealth by mutableStateOf(100f)
@@ -146,8 +142,7 @@ class WorldMapViewModel(
             return WorldMapViewModel(
                 roadNetworkCache = RoadNetworkCache(database.roadNetworkDao()),
                 tileCache        = TileCache(database.mapTileDao()),
-                settingsRepository = SettingsRepository(appCtx),
-                collectibleRepository = CollectibleRepository(database.collectibleDao())
+                settingsRepository = SettingsRepository(appCtx)
             ) as T
         }
     }
@@ -195,10 +190,6 @@ class WorldMapViewModel(
     // El game loop arranca aquí, atado al ciclo de vida del ViewModel (no del Composable).
     // Así, navegar a Settings y volver no detiene a los NPCs.
     init {
-        // Inicializa la base de datos de coleccionables de forma segura en background
-        viewModelScope.launch(Dispatchers.IO) {
-            collectibleRepository.initializeDefaultCollectiblesIfNeeded()
-        }
         startGameLoop()
     }
 
@@ -471,12 +462,6 @@ class WorldMapViewModel(
             while (isActive) {
                 try { // ESCUDO ANTI-CRASHEO INICIADO
                     _uiState.value.currentLocation?.let { location ->
-                        // Intentamos generar uno si no hay ninguno (1 de cada 30 ticks para no saturar)
-                        if (tickCount % 30 == 0) {
-                            trySpawningCollectible(location.latitude, location.longitude)
-                        }
-                        // Revisamos constantemente si estamos parados sobre él
-                        checkCollectibleProximity(location.latitude, location.longitude)
 
                         // --- CONDICIÓN DE COMBATE ---
                         if (_uiState.value.playerAction == PlayerAction.SPECIAL) {
@@ -1240,105 +1225,6 @@ class WorldMapViewModel(
     fun accelerate(pressed: Boolean) { isGasPressed = pressed }
     fun brake(pressed: Boolean) { isBrakePressed = pressed }
 
-    // ─── SISTEMA DE COLECCIONABLES ───────────────────────────────────────────────
-
-    private var isSpawningCollectible = false
-
-    private fun trySpawningCollectible(playerLat: Double, playerLon: Double) {
-        // Si ya hay un coleccionable activo, o ya estamos calculando uno, salimos.
-        if (_uiState.value.activeCollectibles.isNotEmpty() || isSpawningCollectible) return
-
-        isSpawningCollectible = true
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val uncollected = collectibleRepository.getUncollectedCollectibles()
-                if (uncollected.isNotEmpty()) {
-                    val itemToSpawn = uncollected.random()
-
-                    val bearing = Math.random() * 2 * Math.PI
-                    val distanceMeters = 300.0 + Math.random() * 300.0 // 300m – 600m
-                    val clampedLat = playerLat.coerceIn(-85.0, 85.0)
-                    val deltaLat = (distanceMeters * Math.cos(bearing)) / 111000.0
-                    val deltaLon = (distanceMeters * Math.sin(bearing)) / (111000.0 * Math.cos(Math.toRadians(clampedLat)))
-                    val offsetLat = playerLat + deltaLat
-                    val offsetLon = playerLon + deltaLon
-
-                    val tempLoc = org.osmdroid.util.GeoPoint(offsetLat, offsetLon)
-
-                    // USAMOS LA FUNCIÓN DE TU VIEWMODEL QUE SÍ EXISTE
-                    val spawnNode = getNearestPointOnNetwork(tempLoc)
-
-                    val activeItem = ActiveCollectible(
-                        id = itemToSpawn.id,
-                        name = itemToSpawn.name,
-                        description = itemToSpawn.description,
-                        assetPath = itemToSpawn.assetPath,
-                        latitude = spawnNode.latitude,   // En GeoPoint es .latitude
-                        longitude = spawnNode.longitude  // y .longitude
-                    )
-
-                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                        _uiState.update { it.copy(activeCollectibles = listOf(activeItem)) }
-                    }
-                }
-            } finally {
-                isSpawningCollectible = false
-            }
-        }
-    }
-
-    private var promptJob: kotlinx.coroutines.Job? = null
-
-    private fun checkCollectibleProximity(playerLat: Double, playerLon: Double) {
-        val activeItem = _uiState.value.activeCollectibles.firstOrNull() ?: return
-
-        val playerGeo = org.osmdroid.util.GeoPoint(playerLat, playerLon)
-        val itemGeo = org.osmdroid.util.GeoPoint(activeItem.latitude, activeItem.longitude)
-        val distanceInMeters = playerGeo.distanceToAsDouble(itemGeo)
-
-        val INTERACT_RADIUS_METERS = 15.0
-
-        if (distanceInMeters <= INTERACT_RADIUS_METERS) {
-            if (_uiState.value.nearbyCollectible?.id != activeItem.id) {
-                // El jugador acaba de entrar a la zona del objeto
-                _uiState.update { it.copy(nearbyCollectible = activeItem) }
-
-                // Mostrar aviso arriba por 3 segundos
-                promptJob?.cancel()
-                promptJob = viewModelScope.launch {
-                    _uiState.update { it.copy(interactionPrompt = "PRESIONA X PARA RECOGER") }
-                    kotlinx.coroutines.delay(3000)
-                    _uiState.update { it.copy(interactionPrompt = null) }
-                }
-            }
-        } else {
-            if (_uiState.value.nearbyCollectible != null) {
-                _uiState.update { it.copy(nearbyCollectible = null) }
-            }
-        }
-    }
-    // Se llama cuando el usuario presiona el botón X (o el botón que designes)
-    fun onClaimCollectiblePressed() {
-        val itemToClaim = _uiState.value.nearbyCollectible ?: return
-
-        viewModelScope.launch(Dispatchers.IO) {
-            collectibleRepository.claimCollectible(itemToClaim.id)
-
-            withContext(Dispatchers.Main) {
-                _uiState.update {
-                    it.copy(
-                        activeCollectibles = emptyList(), // Lo quitamos del mapa
-                        nearbyCollectible = null,         // Ya no está cerca
-                        showClaimedPopupFor = itemToClaim // Mostramos la tarjeta divertida
-                    )
-                }
-            }
-        }
-    }
-
-    fun dismissClaimedPopup() {
-        _uiState.update { it.copy(showClaimedPopupFor = null) }
-    }
     fun takeDamage(amount: Float) {
         playerHealth = (playerHealth - amount).coerceAtLeast(0f)
         damagePulseTrigger++ // Dispara el efecto visual

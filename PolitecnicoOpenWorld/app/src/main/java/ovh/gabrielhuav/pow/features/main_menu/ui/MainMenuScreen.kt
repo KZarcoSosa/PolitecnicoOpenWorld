@@ -24,14 +24,15 @@ import ovh.gabrielhuav.pow.features.main_menu.viewmodel.MainMenuViewModel
 @Composable
 fun MainMenuScreen(
     onNavigateToMap: (isMultiplayer: Boolean, playerName: String?) -> Unit,
-    onNavigateToSettings: () -> Unit,
-    onNavigateToCollectibles: () -> Unit
+    onNavigateToSettings: () -> Unit
 ) {
+    // Instanciamos el ViewModel del menú principal
     val viewModel: MainMenuViewModel = viewModel()
     val state by viewModel.state.collectAsState()
 
     val configuration = LocalConfiguration.current
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
     val bg = Brush.verticalGradient(listOf(Color(0xFF3B0D1B), Color(0xFF0D0D11)))
 
     Box(modifier = Modifier.fillMaxSize().background(bg)) {
@@ -55,8 +56,7 @@ fun MainMenuScreen(
                         state = state,
                         viewModel = viewModel,
                         onNavigateToMap = onNavigateToMap,
-                        onNavigateToSettings = onNavigateToSettings,
-                        onNavigateToCollectibles = onNavigateToCollectibles
+                        onNavigateToSettings = onNavigateToSettings
                     )
                 }
             }
@@ -72,8 +72,7 @@ fun MainMenuScreen(
                     state = state,
                     viewModel = viewModel,
                     onNavigateToMap = onNavigateToMap,
-                    onNavigateToSettings = onNavigateToSettings,
-                    onNavigateToCollectibles = onNavigateToCollectibles
+                    onNavigateToSettings = onNavigateToSettings
                 )
             }
         }
@@ -84,6 +83,7 @@ fun MainMenuScreen(
             modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp)
         )
 
+        // DIÁLOGO PARA NOMBRE DE MULTIJUGADOR
         if (state.showMultiplayerDialog) {
             AlertDialog(
                 onDismissRequest = { viewModel.updateShowMultiplayerDialog(false) },
@@ -100,6 +100,7 @@ fun MainMenuScreen(
                     TextButton(
                         onClick = {
                             viewModel.updateShowMultiplayerDialog(false)
+                            // Si lo deja vacío, le asignamos uno temporal
                             val finalName = state.playerName.ifBlank { "Jugador_${(1000..9999).random()}" }
                             onNavigateToMap(true, finalName)
                         }
@@ -129,26 +130,25 @@ private fun TitleText(small: Boolean) {
 }
 
 @Composable
-fun MenuButtonsList(
+private fun MenuButtonsList(
     state: MainMenuState,
     viewModel: MainMenuViewModel,
     onNavigateToMap: (isMultiplayer: Boolean, playerName: String?) -> Unit,
-    onNavigateToSettings: () -> Unit,
-    onNavigateToCollectibles: () -> Unit
+    onNavigateToSettings: () -> Unit
 ) {
     MenuButton(
         text = "INICIAR JUEGO",
         onClick = {
             viewModel.onStartGame()
-            onNavigateToMap(false, null)
+            onNavigateToMap(false, null) // Iniciar sin multijugador
         },
         enabled = !state.isLoading
     )
     Spacer(Modifier.height(16.dp))
-
     MenuButton(text = "CARGAR PARTIDA", onClick = {}, enabled = false)
     Spacer(Modifier.height(16.dp))
 
+    // Habilitado y ahora abre el diálogo
     MenuButton(
         text = "MULTIJUGADOR",
         onClick = { viewModel.updateShowMultiplayerDialog(true) },
@@ -156,17 +156,10 @@ fun MenuButtonsList(
     )
     Spacer(Modifier.height(16.dp))
 
+    // El botón ahora simplemente llama a la navegación
     MenuButton(
         text = "AJUSTES",
         onClick = onNavigateToSettings,
-        enabled = true,
-        color = Color(0xFF6B1C3A)
-    )
-    Spacer(Modifier.height(16.dp))
-
-    MenuButton(
-        text = "COLECCIONABLES",
-        onClick = onNavigateToCollectibles,
         enabled = true,
         color = Color(0xFF6B1C3A)
     )
